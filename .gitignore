@@ -1,0 +1,10 @@
+.venv/
+raw/
+scratch/
+scratch_header.txt
+contracts/
+assistance/
+*.duckdb
+
+aggregates/
+__pycache__/

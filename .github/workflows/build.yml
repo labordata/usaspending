@@ -1,0 +1,114 @@
+# Build USAspending award-archive Parquet files and publish them to R2.
+#
+# Upstream regenerates every fiscal year's "Full" zip once a month (around the
+# 6th-8th). `plan` asks the API for the current file name of each FY and
+# compares it with the `.source` marker we uploaded last time, so most daily
+# runs build nothing; once a month, every stale FY builds in parallel.
+#
+# Each build job: download one ~2 GB zip, convert it one CSV member at a time
+# (peak disk ~7 GB, fits a stock runner), upload the Parquet, then write the
+# `.source` marker last so a failed upload never marks a FY as current.
+#
+# Output layout in the bucket:
+#   usaspending/contracts/FY2024.parquet
+#   usaspending/contracts/FY2024.source
+#   usaspending/recipient_year.parquet
+#   usaspending/recipient_year_agency.parquet
+
+name: Build
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      fiscal_years:
+        description: "Comma-separated fiscal years (default: all)"
+        type: string
+        default: ""
+      force:
+        description: "Rebuild even if upstream file is unchanged"
+        type: boolean
+        default: false
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+env:
+  R2_BUCKET: labordata-warehouse-staging
+  R2_PREFIX: usaspending
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_ENDPOINT_URL_S3: ${{ secrets.R2_ENDPOINT }}
+  AWS_DEFAULT_REGION: auto
+  PYTHON: python
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - id: plan
+        run: |
+          matrix=$(python scripts/plan.py \
+            --bucket "$R2_BUCKET" --prefix "$R2_PREFIX" --types contracts \
+            ${{ inputs.fiscal_years && format('--fiscal-years {0}', inputs.fiscal_years) || '' }} \
+            ${{ inputs.force && '--force' || '' }})
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "stale: $matrix"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Build ${{ matrix.type }} FY${{ matrix.fy }}
+        run: make ${{ matrix.type }}/FY${{ matrix.fy }}.parquet
+      - name: Upload to R2
+        run: |
+          aws s3 cp "${{ matrix.type }}/FY${{ matrix.fy }}.parquet" \
+            "s3://$R2_BUCKET/$R2_PREFIX/${{ matrix.type }}/FY${{ matrix.fy }}.parquet"
+          aws s3 cp "${{ matrix.type }}/FY${{ matrix.fy }}.source" \
+            "s3://$R2_BUCKET/$R2_PREFIX/${{ matrix.type }}/FY${{ matrix.fy }}.source" \
+            --content-type text/plain
+
+  aggregate:
+    needs: [plan, build]
+    # Run whenever something was (re)built, even if a sibling FY failed: the
+    # rollup reflects whatever is currently in the bucket.
+    if: always() && needs.plan.result == 'success' && needs.build.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python scripts/aggregate.py --bucket "$R2_BUCKET" --prefix "$R2_PREFIX"
+      - run: aws s3 cp aggregates/ "s3://$R2_BUCKET/$R2_PREFIX/" --recursive
+
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1
