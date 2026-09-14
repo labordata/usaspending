@@ -111,7 +111,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python scripts/aggregate.py --bucket "$R2_BUCKET" --prefix "$R2_PREFIX"
       - run: |
-          aws s3 cp aggregates/ "s3://$R2_BUCKET/$R2_PREFIX/" --recursive --exclude "tmp/*"
+          aws s3 cp aggregates/ "s3://$R2_BUCKET/$R2_PREFIX/" --recursive --exclude "tmp/*" --exclude "scratch.duckdb*"
           # Retired: per-recipient drill-downs are canned queries now.
           aws s3 rm "s3://$R2_BUCKET/$R2_PREFIX/recipient_year_agency.parquet" || true
 

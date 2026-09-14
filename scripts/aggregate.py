@@ -35,7 +35,7 @@ SCA = "(labor_standards_code = 'Y' OR labor_standards = 'Y')"
 DAVIS_BACON = "(construction_wage_rate_requirements_code = 'Y')"
 WALSH_HEALEY = "(materials_supplies_articles_equipment_code = 'Y')"
 
-RECIPIENT_YEAR = f"""
+RECIPIENT_YEAR = """
     SELECT
         action_date_fiscal_year AS fiscal_year,
         recipient_uei,
@@ -47,36 +47,18 @@ RECIPIENT_YEAR = f"""
         count(*) AS transactions,
         count(DISTINCT award_id_piid) AS awards,
         sum(federal_action_obligation) AS obligations,
-        sum(federal_action_obligation) FILTER (WHERE {SCA}) AS service_contract_act_obligations,
-        sum(federal_action_obligation) FILTER (WHERE {DAVIS_BACON}) AS davis_bacon_obligations,
-        sum(federal_action_obligation) FILTER (WHERE {WALSH_HEALEY}) AS walsh_healey_obligations,
+        sum(federal_action_obligation) FILTER (WHERE sca) AS service_contract_act_obligations,
+        sum(federal_action_obligation) FILTER (WHERE davis_bacon) AS davis_bacon_obligations,
+        sum(federal_action_obligation) FILTER (WHERE walsh_healey) AS walsh_healey_obligations,
         max(highly_compensated_officer_1_amount) AS top_officer_compensation
-    FROM read_parquet('{{src}}')
+    FROM tx
     GROUP BY fiscal_year, recipient_uei
     ORDER BY recipient_uei, fiscal_year
 """
 
 # "Top" NAICS / agency = the one with the most obligated dollars, lifetime.
-RECIPIENTS = f"""
-    WITH tx AS (
-        SELECT recipient_uei, recipient_name, recipient_duns, recipient_doing_business_as_name,
-               recipient_parent_uei, recipient_parent_name,
-               recipient_address_line_1, recipient_city_name, recipient_county_name,
-               recipient_state_code, recipient_zip_4_code, recipient_country_code,
-               action_date, action_date_fiscal_year, award_id_piid,
-               federal_action_obligation,
-               naics_code, naics_description,
-               awarding_agency_code, awarding_agency_name,
-               primary_place_of_performance_state_code,
-               contracting_officers_determination_of_business_size,
-               nonprofit_organization, educational_institution, hospital_flag,
-               for_profit_organization, us_state_government, us_local_government,
-               woman_owned_business, veteran_owned_business, minority_owned_business,
-               foreign_owned, highly_compensated_officer_1_amount,
-               {SCA} AS sca, {DAVIS_BACON} AS davis_bacon, {WALSH_HEALEY} AS walsh_healey
-        FROM read_parquet('{{src}}')
-    ),
-    top_naics AS (
+RECIPIENTS = """
+    WITH top_naics AS (
         SELECT recipient_uei, naics_code, naics_description
         FROM (
             SELECT recipient_uei, naics_code, any_value(naics_description) AS naics_description,
@@ -163,7 +145,8 @@ def main():
     ap.add_argument("--memory-limit", default="8GB")
     args = ap.parse_args()
 
-    con = duckdb.connect()
+    os.makedirs(args.out_dir, exist_ok=True)
+    con = duckdb.connect(os.path.join(args.out_dir, "scratch.duckdb"))
     con.execute(f"SET memory_limit='{args.memory_limit}'")
     con.execute(f"SET temp_directory='{os.path.abspath(args.out_dir)}/tmp'")
     if args.src:
@@ -176,11 +159,36 @@ def main():
                 REGION 'auto', URL_STYLE 'path')
         """)
         src = f"s3://{args.bucket}/{args.prefix}/contracts/FY*.parquet"
-    os.makedirs(args.out_dir, exist_ok=True)
+
+    # One pass over the remote Parquet, keeping only the columns the rollups
+    # use, into a local table. Both rollups then read that: the recipients
+    # query references its input four times, and DuckDB re-scans a CTE per
+    # reference -- over httpfs that was four network passes of 93M rows.
+    con.execute(f"""
+        CREATE TABLE tx AS
+        SELECT recipient_uei, recipient_name, recipient_duns, recipient_doing_business_as_name,
+               recipient_parent_uei, recipient_parent_name,
+               recipient_address_line_1, recipient_city_name, recipient_county_name,
+               recipient_state_code, recipient_zip_4_code, recipient_country_code,
+               action_date, action_date_fiscal_year, award_id_piid,
+               federal_action_obligation,
+               naics_code, naics_description,
+               awarding_agency_code, awarding_agency_name,
+               primary_place_of_performance_state_code,
+               contracting_officers_determination_of_business_size,
+               nonprofit_organization, educational_institution, hospital_flag,
+               for_profit_organization, us_state_government, us_local_government,
+               woman_owned_business, veteran_owned_business, minority_owned_business,
+               foreign_owned, highly_compensated_officer_1_amount,
+               {SCA} AS sca, {DAVIS_BACON} AS davis_bacon, {WALSH_HEALEY} AS walsh_healey
+        FROM read_parquet('{src}')
+    """)
+    n = con.execute("SELECT count(*) FROM tx").fetchone()[0]
+    print(f"scanned {n:,} transactions into a local table")
 
     for name, sql in [("recipient_year", RECIPIENT_YEAR), ("recipients", RECIPIENTS)]:
         out = os.path.join(args.out_dir, f"{name}.parquet")
-        con.execute(f"COPY ({sql.format(src=src)}) TO '{out}' (FORMAT parquet, COMPRESSION zstd)")
+        con.execute(f"COPY ({sql}) TO '{out}' (FORMAT parquet, COMPRESSION zstd)")
         n = con.execute(f"SELECT count(*) FROM '{out}'").fetchone()[0]
         print(f"{out}: {n:,} rows, {os.path.getsize(out)/2**20:.0f} MB")
 
