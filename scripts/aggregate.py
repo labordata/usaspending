@@ -16,9 +16,10 @@ import duckdb
 # address -- varies between that recipient's own transactions, so those are
 # any_value() rather than grouping keys.
 #
-# USAspending ships labor_standards_code / labor_standards with the code and
-# description swapped (at least in FY2024), while the other two prevailing-wage
-# pairs are the right way round; accept 'Y' from either column.
+# USAspending's August 2026 archive shipped labor_standards_code /
+# labor_standards with the code and description swapped; September's has them
+# the right way round. Accept 'Y' from either column so the rollup is right
+# whichever vintage a fiscal year was last built from.
 ROLLUP = """
     SELECT
         action_date_fiscal_year AS fiscal_year,

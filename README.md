@@ -36,8 +36,9 @@ make contracts                    # every fiscal year since 2008
 * Transactions with `action_date` in FY N are in `FY{N}.parquet`; a multi-year
   award appears in several files. Group by `award_id_piid` +
   `awarding_sub_agency_code` + `parent_award_id_piid` for award-level views.
-* `labor_standards_code` / `labor_standards` arrive from USAspending with the
-  code and description swapped (the other two prevailing-wage columns pairs do
-  not). The rollups accept `Y` from either.
+* USAspending's August 2026 archive shipped `labor_standards_code` /
+  `labor_standards` with the code and description swapped; the September
+  archive has them the right way round. The rollups accept `Y` from either
+  column, so they are correct across both.
 * `files.usaspending.gov` blocks curl's default user agent; the Makefile sends
   a browser one.
