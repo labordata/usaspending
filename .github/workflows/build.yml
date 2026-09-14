@@ -30,6 +30,10 @@ on:
         description: "Rebuild even if upstream file is unchanged"
         type: boolean
         default: false
+      aggregate:
+        description: "Rebuild the rollups even if no fiscal year changed"
+        type: boolean
+        default: false
 
 concurrency:
   group: build
@@ -93,8 +97,11 @@ jobs:
   aggregate:
     needs: [plan, build]
     # Run whenever something was (re)built, even if a sibling FY failed: the
-    # rollup reflects whatever is currently in the bucket.
-    if: always() && needs.plan.result == 'success' && needs.build.result != 'skipped'
+    # rollup reads whatever is currently in the bucket. The `aggregate` input
+    # runs it on its own, for when the rollup SQL changes but no fiscal year has.
+    if: |
+      always() && needs.plan.result == 'success'
+      && (needs.build.result != 'skipped' || inputs.aggregate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
