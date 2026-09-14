@@ -11,6 +11,11 @@ import os
 
 import duckdb
 
+# Grain is one row per recipient UEI per fiscal year (per agency, for the
+# second rollup). Everything else about the recipient -- DUNS, parent, name,
+# address -- varies between that recipient's own transactions, so those are
+# any_value() rather than grouping keys.
+#
 # USAspending ships labor_standards_code / labor_standards with the code and
 # description swapped (at least in FY2024), while the other two prevailing-wage
 # pairs are the right way round; accept 'Y' from either column.
@@ -18,9 +23,9 @@ ROLLUP = """
     SELECT
         action_date_fiscal_year AS fiscal_year,
         recipient_uei,
-        recipient_duns,
+        any_value(recipient_duns) AS recipient_duns,
         any_value(recipient_name) AS recipient_name,
-        recipient_parent_uei,
+        any_value(recipient_parent_uei) AS recipient_parent_uei,
         any_value(recipient_parent_name) AS recipient_parent_name,
         any_value(recipient_city_name) AS recipient_city_name,
         any_value(recipient_state_code) AS recipient_state_code,
@@ -39,8 +44,8 @@ ROLLUP = """
             AS walsh_healey_obligations,
         max(highly_compensated_officer_1_amount) AS top_officer_compensation
     FROM read_parquet('{src}')
-    GROUP BY fiscal_year, recipient_uei, recipient_duns, recipient_parent_uei {agency_group}
-    ORDER BY recipient_uei, recipient_duns, fiscal_year {agency_group}
+    GROUP BY fiscal_year, recipient_uei {agency_group}
+    ORDER BY recipient_uei, fiscal_year {agency_group}
 """
 
 

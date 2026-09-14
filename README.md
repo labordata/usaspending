@@ -30,6 +30,9 @@ make contracts                    # every fiscal year since 2008
 
 ## Notes on the data
 
+* FY2015 has ~75% more rows than FY2014 with no matching jump in dollars:
+  FPDS began capturing many low-value purchases that earlier years omit. Row
+  counts are not comparable across that boundary; obligation totals are.
 * Transactions with `action_date` in FY N are in `FY{N}.parquet`; a multi-year
   award appears in several files. Group by `award_id_piid` +
   `awarding_sub_agency_code` + `parent_award_id_piid` for award-level views.
