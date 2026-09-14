@@ -13,8 +13,8 @@ USAspending each month.
 | file | grain |
 |---|---|
 | `contracts/FY{yyyy}.parquet` | one row per contract transaction; every source column except four that are derivable from the others (see `columns.yml`), typed, sorted by recipient |
+| `recipients.parquet` | one row per recipient UEI: current name and address, lifetime totals, top NAICS and awarding agency by dollars, business-type flags |
 | `recipient_year.parquet` | recipient × fiscal year: transactions, awards, obligations, and obligations under the Service Contract Act, Davis-Bacon, and Walsh-Healey |
-| `recipient_year_agency.parquet` | the same, further split by awarding agency |
 
 Files are published to the `usaspending/` prefix of the warehouse R2 bucket by
 `.github/workflows/build.yml`, which runs daily but only rebuilds fiscal years

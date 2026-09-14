@@ -12,8 +12,8 @@
 # Output layout in the bucket:
 #   usaspending/contracts/FY2024.parquet
 #   usaspending/contracts/FY2024.source
+#   usaspending/recipients.parquet
 #   usaspending/recipient_year.parquet
-#   usaspending/recipient_year_agency.parquet
 
 name: Build
 
@@ -110,7 +110,10 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python scripts/aggregate.py --bucket "$R2_BUCKET" --prefix "$R2_PREFIX"
-      - run: aws s3 cp aggregates/ "s3://$R2_BUCKET/$R2_PREFIX/" --recursive
+      - run: |
+          aws s3 cp aggregates/ "s3://$R2_BUCKET/$R2_PREFIX/" --recursive --exclude "tmp/*"
+          # Retired: per-recipient drill-downs are canned queries now.
+          aws s3 rm "s3://$R2_BUCKET/$R2_PREFIX/recipient_year_agency.parquet" || true
 
   workflow-keepalive:
     if: github.event_name == 'schedule'
