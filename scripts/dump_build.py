@@ -29,15 +29,25 @@ def build(dump, name, spec, out_dir, con):
     if missing:
         print(f"  note: drop list names columns not in the table: {sorted(missing)}", file=sys.stderr)
     keep = [c for c in columns if c not in drop]
-    select = ", ".join(f'"{c}"' for c in keep)
     first = columns[0]
+    read = (f"read_csv('{gz}', delim='\t', header=false, nullstr='\\N', quote='', escape='', "
+            f"names={columns}, null_padding=true, compression='gzip')")
+    # Postgres timestamptz columns (all written as +00) sniff as TIMESTAMP WITH
+    # TIME ZONE. Store them as plain UTC timestamps: reading a timestamptz back
+    # through DuckDB's Python client needs pytz, which the serving image does
+    # not carry, and it 400'd every page of the affected tables.
+    sniffed = {r[0]: r[1] for r in con.execute(
+        f"DESCRIBE SELECT * FROM {read[:-1]}, sample_size=200000)").fetchall()}
+    tz = [c for c in keep if sniffed.get(c) == "TIMESTAMP WITH TIME ZONE"]
+    select = ", ".join(f'"{c}"::TIMESTAMP AS "{c}"' if c in tz else f'"{c}"' for c in keep)
+    if tz:
+        print(f"  timestamptz -> timestamp (UTC): {tz}", file=sys.stderr)
     out = os.path.join(out_dir, f"{name}.parquet")
     built = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     con.execute(f"""
         COPY (
             SELECT {select}
-            FROM read_csv('{gz}', delim='\t', header=false, nullstr='\\N', quote='', escape='',
-                          names={columns}, null_padding=true, compression='gzip', sample_size=-1)
+            FROM {read[:-1]}, sample_size=-1)
             WHERE "{first}" IS DISTINCT FROM '\\.' AND ({spec.get('where', 'true')})
             ORDER BY {spec['sort']}
         ) TO '{out}' (FORMAT parquet, COMPRESSION zstd,
@@ -70,6 +80,7 @@ def main():
     con.execute(f"SET memory_limit='{args.memory_limit}'")
     con.execute(f"SET temp_directory='{os.path.join(args.out_dir, 'tmp')}'")
     con.execute("SET preserve_insertion_order=false")
+    con.execute("SET TimeZone='UTC'")  # timestamptz -> timestamp casts keep the UTC wall time
     for name, spec in specs.items():
         build(dump, name, spec, args.out_dir, con)
     con.close()
