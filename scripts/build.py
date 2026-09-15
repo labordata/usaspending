@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--source-name", help="upstream file name to record (default: zip basename)")
     ap.add_argument("--columns", default="columns.yml")
+    ap.add_argument("--where", help="SQL predicate over the raw (all-VARCHAR) columns; rows failing it are not loaded")
     ap.add_argument("--memory-limit", default="6GB")
     ap.add_argument("--tmp", help="scratch dir for extracted CSVs + staging db (default: system temp)")
     args = ap.parse_args()
@@ -79,7 +80,8 @@ def main():
                 select = ", ".join(
                     cast(c, t) if c in present else f'NULL::{SQL_TYPES.get(t, t)} AS "{c}"'
                     for c, t in cols.items())
-                con.execute(f"INSERT INTO tx SELECT {select} FROM {read}")
+                where = f" WHERE {args.where}" if args.where else ""
+                con.execute(f"INSERT INTO tx SELECT {select} FROM {read}{where}")
                 os.remove(csv_path)
 
         n = con.execute("SELECT count(*) FROM tx").fetchone()[0]
@@ -98,7 +100,8 @@ def main():
             COPY (SELECT * FROM tx ORDER BY {SORT[args.type]})
             TO '{args.out}'
             (FORMAT parquet, COMPRESSION zstd,
-             KV_METADATA {{source: '{source}', built_at: '{built}'}})
+             KV_METADATA {{source: '{source}', built_at: '{built}',
+                           filter: '{(args.where or "").replace("'", "''")}'}})
         """)
         con.close()
         print(f"{args.out}: {n:,} rows, {os.path.getsize(args.out)/2**20:.0f} MB, source {source}",

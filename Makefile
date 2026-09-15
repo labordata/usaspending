@@ -29,8 +29,12 @@ contracts/FY%.parquet : raw/FY%_All_Contracts_Full.zip columns.yml scripts/build
 	    --source-name "$$(cat $<.source 2>/dev/null || basename $<)"
 	cat $<.source > $(basename $@).source
 
+# Assistance keeps only records to identified organizations (record type 2):
+# the other 60% of rows are county-level aggregates with no recipient, or
+# PII-redacted payments to individuals -- nothing to tie to an employer.
 assistance/FY%.parquet : raw/FY%_All_Assistance_Full.zip columns.yml scripts/build.py
 	$(PYTHON) scripts/build.py --type assistance --zip $< --out $@ \
+	    --where "record_type_code = '2'" \
 	    --source-name "$$(cat $<.source 2>/dev/null || basename $<)"
 	cat $<.source > $(basename $@).source
 

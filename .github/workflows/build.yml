@@ -31,6 +31,10 @@ on:
         description: "Comma-separated fiscal years (default: all)"
         type: string
         default: ""
+      types:
+        description: "Award types to consider (comma-separated)"
+        type: string
+        default: "contracts,assistance"
       force:
         description: "Rebuild even if upstream file is unchanged"
         type: boolean
@@ -86,7 +90,7 @@ jobs:
       - id: plan
         run: |
           matrix=$(python scripts/plan.py \
-            --bucket "$R2_BUCKET" --prefix "$R2_PREFIX" --types contracts,assistance \
+            --bucket "$R2_BUCKET" --prefix "$R2_PREFIX" --types "${{ inputs.types || 'contracts,assistance' }}" \
             ${{ inputs.fiscal_years && format('--fiscal-years {0}', inputs.fiscal_years) || '' }} \
             ${{ inputs.force && '--force' || '' }})
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"

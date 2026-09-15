@@ -13,7 +13,7 @@ USAspending each month.
 | file | grain |
 |---|---|
 | `contracts/FY{yyyy}.parquet` | one row per contract transaction; every source column except four that are derivable from the others (see `columns.yml`), typed, sorted by recipient |
-| `assistance/FY{yyyy}.parquet` | one row per financial-assistance transaction (grants, loans, direct payments, insurance), same treatment as contracts; see `columns.yml` |
+| `assistance/FY{yyyy}.parquet` | one row per financial-assistance transaction (grants, loans, direct payments, insurance) to an identified organization (`record_type_code = '2'`); county-level aggregates and PII-redacted payments to individuals are left out. Same treatment as contracts otherwise; see `columns.yml` |
 | `subawards.parquet` | every subcontract and sub-grant reported under FFATA (FY2011 onward), from the monthly database dump |
 | `sam_entities.parquet` | SAM.gov entity registrations as USAspending ingests them: one row per UEI with name, parent, address, business types |
 | `uei_crosswalk.parquet`, `historic_parent_duns.parquet` | identifier history: DUNS ↔ UEI, and DUNS → parent by year (2014–2018 only) |
@@ -50,6 +50,9 @@ python scripts/dump_build.py --dump latest --only naics,sam_entities   # needs p
 * Transactions with `action_date` in FY N are in `FY{N}.parquet`; a multi-year
   award appears in several files. Group by `award_id_piid` +
   `awarding_sub_agency_code` + `parent_award_id_piid` for award-level views.
+* In assistance files before FY2019, `assistance_type_description` and
+  `record_type_description` are empty; the `_code` columns are populated in
+  every year, so filter on those.
 * USAspending's August 2026 archive shipped `labor_standards_code` /
   `labor_standards` with the code and description swapped; the September
   archive has them the right way round. The rollups accept `Y` from either

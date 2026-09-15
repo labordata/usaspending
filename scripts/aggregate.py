@@ -5,10 +5,12 @@ write them as Parquet next to the per-year files.
 
 Two outputs:
 
-  recipients.parquet      one row per recipient UEI: current name and address
-                          (from the most recent transaction), lifetime totals,
-                          top NAICS and awarding agency by dollars, business
-                          type flags. The browse / facet / crosswalk surface.
+  recipients.parquet      one row per recipient UEI across contracts AND
+                          assistance: current name and address (from the most
+                          recent transaction), lifetime totals split by kind,
+                          top NAICS / assistance program / agency by dollars,
+                          business type flags. The browse / facet / crosswalk
+                          surface.
   recipient_year.parquet  one row per recipient UEI per fiscal year, with
                           obligations split by prevailing-wage regime. The
                           cross-recipient time series ("top SCA contractors in
@@ -37,16 +39,19 @@ WALSH_HEALEY = "(materials_supplies_articles_equipment_code = 'Y')"
 
 RECIPIENT_YEAR = """
     SELECT
-        action_date_fiscal_year AS fiscal_year,
+        fiscal_year,
         recipient_uei,
         arg_max(recipient_name, action_date) AS recipient_name,
         arg_max(recipient_parent_uei, action_date) AS recipient_parent_uei,
         arg_max(recipient_parent_name, action_date) AS recipient_parent_name,
-        arg_max(recipient_city_name, action_date) AS recipient_city_name,
-        arg_max(recipient_state_code, action_date) AS recipient_state_code,
+        arg_max(city, action_date) AS recipient_city_name,
+        arg_max(state, action_date) AS recipient_state_code,
         count(*) AS transactions,
-        count(DISTINCT award_id_piid) AS awards,
+        count(DISTINCT award_id) AS awards,
         sum(federal_action_obligation) AS obligations,
+        sum(federal_action_obligation) FILTER (WHERE kind = 'contract') AS contract_obligations,
+        sum(federal_action_obligation) FILTER (WHERE kind = 'assistance') AS assistance_obligations,
+        sum(face_value_of_loan) AS loan_face_value,
         sum(federal_action_obligation) FILTER (WHERE sca) AS service_contract_act_obligations,
         sum(federal_action_obligation) FILTER (WHERE davis_bacon) AS davis_bacon_obligations,
         sum(federal_action_obligation) FILTER (WHERE walsh_healey) AS walsh_healey_obligations,
@@ -68,6 +73,16 @@ RECIPIENTS = """
             GROUP BY recipient_uei, naics_code
         ) WHERE rn = 1
     ),
+    top_cfda AS (
+        SELECT recipient_uei, cfda_number, cfda_title
+        FROM (
+            SELECT recipient_uei, cfda_number, any_value(cfda_title) AS cfda_title,
+                   row_number() OVER (PARTITION BY recipient_uei
+                                      ORDER BY sum(federal_action_obligation) DESC) AS rn
+            FROM tx WHERE cfda_number IS NOT NULL
+            GROUP BY recipient_uei, cfda_number
+        ) WHERE rn = 1
+    ),
     top_agency AS (
         SELECT recipient_uei, awarding_agency_name
         FROM (
@@ -79,57 +94,64 @@ RECIPIENTS = """
         ) WHERE rn = 1
     ),
     top_state AS (
-        SELECT recipient_uei, primary_place_of_performance_state_code
+        SELECT recipient_uei, pop_state
         FROM (
-            SELECT recipient_uei, primary_place_of_performance_state_code,
+            SELECT recipient_uei, pop_state,
                    row_number() OVER (PARTITION BY recipient_uei
                                       ORDER BY sum(federal_action_obligation) DESC) AS rn
-            FROM tx WHERE primary_place_of_performance_state_code IS NOT NULL
-            GROUP BY recipient_uei, primary_place_of_performance_state_code
+            FROM tx WHERE pop_state IS NOT NULL
+            GROUP BY recipient_uei, pop_state
         ) WHERE rn = 1
     ),
     summary AS (
         SELECT
             recipient_uei,
             arg_max(recipient_name, action_date) AS recipient_name,
-            arg_max(recipient_doing_business_as_name, action_date) AS doing_business_as,
-            arg_max(recipient_duns, action_date) AS recipient_duns,
+            arg_max(dba, action_date) FILTER (WHERE dba IS NOT NULL) AS doing_business_as,
+            arg_max(recipient_duns, action_date) FILTER (WHERE recipient_duns IS NOT NULL) AS recipient_duns,
             arg_max(recipient_parent_uei, action_date) AS recipient_parent_uei,
             arg_max(recipient_parent_name, action_date) AS recipient_parent_name,
-            arg_max(recipient_address_line_1, action_date) AS address,
-            arg_max(recipient_city_name, action_date) AS city,
-            arg_max(recipient_county_name, action_date) AS county,
-            arg_max(recipient_state_code, action_date) AS state,
-            arg_max(recipient_zip_4_code, action_date)[:5] AS zip,
-            arg_max(recipient_country_code, action_date) AS country,
-            min(action_date_fiscal_year) AS first_fiscal_year,
-            max(action_date_fiscal_year) AS last_fiscal_year,
+            arg_max(address, action_date) AS address,
+            arg_max(city, action_date) AS city,
+            arg_max(county, action_date) AS county,
+            arg_max(state, action_date) AS state,
+            arg_max(zip, action_date) AS zip,
+            arg_max(country, action_date) AS country,
+            min(fiscal_year) AS first_fiscal_year,
+            max(fiscal_year) AS last_fiscal_year,
             count(*) AS transactions,
-            count(DISTINCT award_id_piid) AS awards,
+            count(DISTINCT award_id) AS awards,
             sum(federal_action_obligation) AS obligations,
+            sum(federal_action_obligation) FILTER (WHERE kind = 'contract') AS contract_obligations,
+            sum(federal_action_obligation) FILTER (WHERE kind = 'assistance') AS assistance_obligations,
+            sum(federal_action_obligation) FILTER (WHERE assistance_type_code IN ('02','03','04','05')) AS grant_obligations,
+            sum(face_value_of_loan) AS loan_face_value,
             sum(federal_action_obligation) FILTER (WHERE sca) AS service_contract_act_obligations,
             sum(federal_action_obligation) FILTER (WHERE davis_bacon) AS davis_bacon_obligations,
             sum(federal_action_obligation) FILTER (WHERE walsh_healey) AS walsh_healey_obligations,
-            arg_max(contracting_officers_determination_of_business_size, action_date) AS business_size,
-            arg_max(nonprofit_organization, action_date) AS nonprofit,
-            arg_max(educational_institution, action_date) AS educational_institution,
-            arg_max(hospital_flag, action_date) AS hospital,
-            arg_max(for_profit_organization, action_date) AS for_profit,
-            arg_max(us_state_government OR us_local_government, action_date) AS state_or_local_government,
-            arg_max(woman_owned_business, action_date) AS woman_owned,
-            arg_max(veteran_owned_business, action_date) AS veteran_owned,
-            arg_max(minority_owned_business, action_date) AS minority_owned,
-            arg_max(foreign_owned, action_date) AS foreign_owned,
+            arg_max(business_size, action_date) FILTER (WHERE kind = 'contract') AS business_size,
+            arg_max(assistance_business_type, action_date) FILTER (WHERE kind = 'assistance') AS assistance_business_type,
+            arg_max(nonprofit_organization, action_date) FILTER (WHERE kind = 'contract') AS nonprofit,
+            arg_max(educational_institution, action_date) FILTER (WHERE kind = 'contract') AS educational_institution,
+            arg_max(hospital_flag, action_date) FILTER (WHERE kind = 'contract') AS hospital,
+            arg_max(for_profit_organization, action_date) FILTER (WHERE kind = 'contract') AS for_profit,
+            arg_max(state_or_local_government, action_date) FILTER (WHERE kind = 'contract') AS state_or_local_government,
+            arg_max(woman_owned_business, action_date) FILTER (WHERE kind = 'contract') AS woman_owned,
+            arg_max(veteran_owned_business, action_date) FILTER (WHERE kind = 'contract') AS veteran_owned,
+            arg_max(minority_owned_business, action_date) FILTER (WHERE kind = 'contract') AS minority_owned,
+            arg_max(foreign_owned, action_date) FILTER (WHERE kind = 'contract') AS foreign_owned,
             max(highly_compensated_officer_1_amount) AS top_officer_compensation
         FROM tx
         GROUP BY recipient_uei
     )
     SELECT s.*,
            n.naics_code AS top_naics_code, n.naics_description AS top_naics,
+           c.cfda_number AS top_cfda_number, c.cfda_title AS top_cfda,
            a.awarding_agency_name AS top_awarding_agency,
-           p.primary_place_of_performance_state_code AS top_place_of_performance_state
+           p.pop_state AS top_place_of_performance_state
     FROM summary s
     LEFT JOIN top_naics n USING (recipient_uei)
+    LEFT JOIN top_cfda c USING (recipient_uei)
     LEFT JOIN top_agency a USING (recipient_uei)
     LEFT JOIN top_state p USING (recipient_uei)
     ORDER BY obligations DESC
@@ -141,7 +163,7 @@ def main():
     ap.add_argument("--bucket", required=True)
     ap.add_argument("--prefix", required=True)
     ap.add_argument("--out-dir", default="aggregates")
-    ap.add_argument("--src", help="override the parquet glob (e.g. a local path, for testing)")
+    ap.add_argument("--src", help="override the parquet globs as 'contracts,assistance' (e.g. local paths, for testing)")
     ap.add_argument("--memory-limit", default="8GB")
     args = ap.parse_args()
 
@@ -150,7 +172,7 @@ def main():
     con.execute(f"SET memory_limit='{args.memory_limit}'")
     con.execute(f"SET temp_directory='{os.path.abspath(args.out_dir)}/tmp'")
     if args.src:
-        src = args.src
+        contracts, assistance = args.src.split(",")
     else:
         con.execute("INSTALL httpfs; LOAD httpfs;")
         con.execute(f"""
@@ -158,30 +180,52 @@ def main():
                 ENDPOINT '{os.environ["AWS_ENDPOINT_URL_S3"].removeprefix("https://")}',
                 REGION 'auto', URL_STYLE 'path')
         """)
-        src = f"s3://{args.bucket}/{args.prefix}/contracts/FY*.parquet"
+        contracts = f"s3://{args.bucket}/{args.prefix}/contracts/FY*.parquet"
+        assistance = f"s3://{args.bucket}/{args.prefix}/assistance/FY*.parquet"
 
-    # One pass over the remote Parquet, keeping only the columns the rollups
-    # use, into a local table. Both rollups then read that: the recipients
-    # query references its input four times, and DuckDB re-scans a CTE per
-    # reference -- over httpfs that was four network passes of 93M rows.
+    # One pass over the remote Parquet -- contracts and assistance unioned on
+    # a common column set, keeping only what the rollups use -- into a local
+    # table. Both rollups then read that: the recipients query references its
+    # input four times, and DuckDB re-scans a CTE per reference, so over
+    # httpfs that was four network passes of 93M rows.
     con.execute(f"""
         CREATE TABLE tx AS
-        SELECT recipient_uei, recipient_name, recipient_duns, recipient_doing_business_as_name,
+        SELECT 'contract' AS kind,
+               recipient_uei, recipient_name, recipient_duns, recipient_doing_business_as_name AS dba,
+               recipient_parent_uei, recipient_parent_name,
+               recipient_address_line_1 AS address, recipient_city_name AS city, recipient_county_name AS county,
+               recipient_state_code AS state, recipient_zip_4_code[:5] AS zip, recipient_country_code AS country,
+               action_date, action_date_fiscal_year AS fiscal_year, award_id_piid AS award_id,
+               federal_action_obligation,
+               naics_code, naics_description, NULL AS cfda_number, NULL AS cfda_title, NULL AS assistance_type_code,
+               NULL::DECIMAL(18,2) AS face_value_of_loan,
+               awarding_agency_code, awarding_agency_name,
+               primary_place_of_performance_state_code AS pop_state,
+               contracting_officers_determination_of_business_size AS business_size,
+               NULL AS assistance_business_type,
+               nonprofit_organization, educational_institution, hospital_flag,
+               for_profit_organization, us_state_government OR us_local_government AS state_or_local_government,
+               woman_owned_business, veteran_owned_business, minority_owned_business, foreign_owned,
+               highly_compensated_officer_1_amount,
+               {SCA} AS sca, {DAVIS_BACON} AS davis_bacon, {WALSH_HEALEY} AS walsh_healey
+        FROM read_parquet('{contracts}')
+        UNION ALL
+        SELECT 'assistance',
+               recipient_uei, recipient_name, recipient_duns, NULL,
                recipient_parent_uei, recipient_parent_name,
                recipient_address_line_1, recipient_city_name, recipient_county_name,
-               recipient_state_code, recipient_zip_4_code, recipient_country_code,
-               action_date, action_date_fiscal_year, award_id_piid,
+               recipient_state_code, recipient_zip_code[:5], recipient_country_code,
+               action_date, action_date_fiscal_year, coalesce(award_id_fain, award_id_uri),
                federal_action_obligation,
-               naics_code, naics_description,
+               NULL, NULL, cfda_number, cfda_title, assistance_type_code,
+               face_value_of_loan,
                awarding_agency_code, awarding_agency_name,
-               primary_place_of_performance_state_code,
-               contracting_officers_determination_of_business_size,
-               nonprofit_organization, educational_institution, hospital_flag,
-               for_profit_organization, us_state_government, us_local_government,
-               woman_owned_business, veteran_owned_business, minority_owned_business,
-               foreign_owned, highly_compensated_officer_1_amount,
-               {SCA} AS sca, {DAVIS_BACON} AS davis_bacon, {WALSH_HEALEY} AS walsh_healey
-        FROM read_parquet('{src}')
+               primary_place_of_performance_code[:2],
+               NULL, business_types_description,
+               NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+               highly_compensated_officer_1_amount,
+               false, false, false
+        FROM read_parquet('{assistance}')
     """)
     n = con.execute("SELECT count(*) FROM tx").fetchone()[0]
     print(f"scanned {n:,} transactions into a local table")
