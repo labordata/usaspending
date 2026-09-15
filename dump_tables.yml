@@ -1,7 +1,8 @@
 # Tables pulled from USAspending's monthly PostgreSQL dump (see
 # scripts/dump_build.py). Each becomes <name>.parquet. Columns listed under
-# `drop` are left out (search vectors, internal ids); `sort` orders the
-# Parquet so row-group statistics make lookups on that key cheap.
+# `drop` are left out (search vectors, internal ids); `where` keeps a subset;
+# `sort` orders the Parquet so row-group statistics make lookups on that key
+# cheap.
 subawards:
   table: rpt.subaward_search
   sort: sub_awardee_or_recipient_uei, sub_action_date
@@ -13,11 +14,14 @@ sam_entities:
   sort: uei
   drop: [broker_duns_id]
 recipient_lookup:
+  # USAspending's recipient master. 16M of its 18M rows are name-only
+  # assistance recipients (no UEI or DUNS -- sole proprietors, individuals);
+  # keep the identified ones, which carry alternate_names that nothing else
+  # does (Boeing: "BOEING COMPANY, THE", "MCDONNELL DOUGLAS CORP").
   table: rpt.recipient_lookup
-  sort: uei
-recipient_profile:
-  table: rpt.recipient_profile
-  sort: uei
+  sort: uei, duns
+  where: uei IS NOT NULL OR duns IS NOT NULL
+  drop: [id, recipient_hash]
 uei_crosswalk:
   table: public.uei_crosswalk
   sort: uei

@@ -38,7 +38,7 @@ def build(dump, name, spec, out_dir, con):
             SELECT {select}
             FROM read_csv('{gz}', delim='\t', header=false, nullstr='\\N', quote='', escape='',
                           names={columns}, null_padding=true, compression='gzip', sample_size=-1)
-            WHERE "{first}" IS DISTINCT FROM '\\.'
+            WHERE "{first}" IS DISTINCT FROM '\\.' AND ({spec.get('where', 'true')})
             ORDER BY {spec['sort']}
         ) TO '{out}' (FORMAT parquet, COMPRESSION zstd,
                       KV_METADATA {{source: '{dump.name}', source_table: '{spec['table']}', built_at: '{built}'}})
