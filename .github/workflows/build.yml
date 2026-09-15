@@ -10,10 +10,15 @@
 # `.source` marker last so a failed upload never marks a FY as current.
 #
 # Output layout in the bucket:
-#   usaspending/contracts/FY2024.parquet
-#   usaspending/contracts/FY2024.source
-#   usaspending/recipients.parquet
+#   usaspending/contracts/FY2024.parquet       one per fiscal year, from the
+#   usaspending/contracts/FY2024.source        monthly award archive zips
+#   usaspending/assistance/FY2024.parquet      (same, financial assistance)
+#   usaspending/recipients.parquet             rollups (aggregate job)
 #   usaspending/recipient_year.parquet
+#   usaspending/subawards.parquet              tables pulled out of the monthly
+#   usaspending/sam_entities.parquet           PostgreSQL dump by range request
+#   usaspending/naics.parquet ... etc          (dump job; see dump_tables.yml)
+#   usaspending/dump.source
 
 name: Build
 
@@ -53,16 +58,31 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      dump_stale: ${{ steps.dump.outputs.stale }}
+      dump_latest: ${{ steps.dump.outputs.latest }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - id: dump
+        run: |
+          # The monthly PostgreSQL dump has no listing endpoint; probe for the
+          # newest usaspending-db_YYYYMMDD.zip and compare with what we built.
+          latest=$(python -c "import sys; sys.path.insert(0,'scripts'); import dump_extract as de; print(de.latest_dump())")
+          current=$(aws s3 cp "s3://$R2_BUCKET/$R2_PREFIX/dump.source" - 2>/dev/null || true)
+          echo "dump: latest=$latest current=$current"
+          if [ "${{ inputs.force }}" = "true" ] || [ "$latest" != "$current" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
       - id: plan
         run: |
           matrix=$(python scripts/plan.py \
-            --bucket "$R2_BUCKET" --prefix "$R2_PREFIX" --types contracts \
+            --bucket "$R2_BUCKET" --prefix "$R2_PREFIX" --types contracts,assistance \
             ${{ inputs.fiscal_years && format('--fiscal-years {0}', inputs.fiscal_years) || '' }} \
             ${{ inputs.force && '--force' || '' }})
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -93,6 +113,39 @@ jobs:
           aws s3 cp "${{ matrix.type }}/FY${{ matrix.fy }}.source" \
             "s3://$R2_BUCKET/$R2_PREFIX/${{ matrix.type }}/FY${{ matrix.fy }}.source" \
             --content-type text/plain
+
+  dump:
+    needs: plan
+    if: needs.plan.outputs.dump_stale == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Install pg_restore
+        run: |
+          # The dump's archive format needs a pg_restore at least as new as the
+          # PostgreSQL that wrote it; Ubuntu's stock one is too old.
+          sudo apt-get install -y -q postgresql-common >/dev/null
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null 2>&1
+          sudo apt-get install -y -q postgresql-client-18 >/dev/null
+          pg_restore --version
+      - name: Build tables from ${{ needs.plan.outputs.dump_latest }}
+        run: |
+          # Range-fetches only the listed tables out of the ~180 GB dump; the
+          # big one (subaward_search, ~4 GB gzip) is read by DuckDB straight
+          # from the gzip so the runner never holds the ~26 GB text form.
+          python scripts/dump_build.py --dump "${{ needs.plan.outputs.dump_latest }}" \
+            --out-dir dump --memory-limit 10GB
+          df -h .
+      - name: Upload to R2
+        run: |
+          aws s3 cp dump/ "s3://$R2_BUCKET/$R2_PREFIX/" --recursive --exclude "*" --include "*.parquet"
+          # marker last, so a failed upload never marks the dump as current
+          aws s3 cp dump/SOURCE "s3://$R2_BUCKET/$R2_PREFIX/dump.source" --content-type text/plain
 
   aggregate:
     needs: [plan, build]

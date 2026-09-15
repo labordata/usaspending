@@ -1,0 +1,47 @@
+# Tables pulled from USAspending's monthly PostgreSQL dump (see
+# scripts/dump_build.py). Each becomes <name>.parquet. Columns listed under
+# `drop` are left out (search vectors, internal ids); `sort` orders the
+# Parquet so row-group statistics make lookups on that key cheap.
+subawards:
+  table: rpt.subaward_search
+  sort: sub_awardee_or_recipient_uei, sub_action_date
+  drop: [keyword_ts_vector, award_ts_vector, recipient_name_ts_vector,
+         subaward_recipient_hash, broker_created_at, broker_updated_at,
+         treasury_account_identifiers, program_activities]
+sam_entities:
+  table: int.duns
+  sort: uei
+  drop: [broker_duns_id]
+recipient_lookup:
+  table: rpt.recipient_lookup
+  sort: uei
+recipient_profile:
+  table: rpt.recipient_profile
+  sort: uei
+uei_crosswalk:
+  table: public.uei_crosswalk
+  sort: uei
+  drop: [id]
+historic_parent_duns:
+  table: public.historic_parent_duns
+  sort: awardee_or_recipient_uniqu, year
+  drop: [broker_historic_duns_id]
+naics:
+  table: public.naics
+  sort: code
+  drop: [embedding, embedding_generated_at]
+psc:
+  table: public.psc
+  sort: code
+cfda:
+  table: public.references_cfda
+  sort: program_number
+toptier_agency:
+  table: public.toptier_agency
+  sort: toptier_code
+subtier_agency:
+  table: public.subtier_agency
+  sort: subtier_code
+office:
+  table: public.office
+  sort: office_code

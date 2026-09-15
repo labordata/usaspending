@@ -13,12 +13,24 @@ USAspending each month.
 | file | grain |
 |---|---|
 | `contracts/FY{yyyy}.parquet` | one row per contract transaction; every source column except four that are derivable from the others (see `columns.yml`), typed, sorted by recipient |
+| `assistance/FY{yyyy}.parquet` | one row per financial-assistance transaction (grants, loans, direct payments, insurance), same treatment as contracts; see `columns.yml` |
+| `subawards.parquet` | every subcontract and sub-grant reported under FFATA (FY2011 onward), from the monthly database dump |
+| `sam_entities.parquet` | SAM.gov entity registrations as USAspending ingests them: one row per UEI with name, parent, address, business types |
+| `uei_crosswalk.parquet`, `historic_parent_duns.parquet` | identifier history: DUNS ↔ UEI, and DUNS → parent by year (2014–2018 only) |
+| `naics`, `psc`, `cfda`, `toptier_agency`, `subtier_agency`, `office` | reference tables |
 | `recipients.parquet` | one row per recipient UEI: current name and address, lifetime totals, top NAICS and awarding agency by dollars, business-type flags |
 | `recipient_year.parquet` | recipient × fiscal year: transactions, awards, obligations, and obligations under the Service Contract Act, Davis-Bacon, and Walsh-Healey |
 
 Files are published to the `usaspending/` prefix of the warehouse R2 bucket by
 `.github/workflows/build.yml`, which runs daily but only rebuilds fiscal years
-whose upstream file has changed.
+whose upstream file has changed, and only re-pulls the dump tables when a new
+monthly dump appears.
+
+The dump tables come from USAspending's ~180 GB PostgreSQL dump without
+downloading it: the dump is a zip of a pg_dump directory archive with one
+stored gzip per table, so `scripts/dump_extract.py` reads the zip's central
+directory and `toc.dat` by HTTP range request and then fetches just the
+tables in `dump_tables.yml`.
 
 ## Building locally
 
@@ -26,6 +38,8 @@ whose upstream file has changed.
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 make contracts/FY2024.parquet     # downloads ~2 GB, needs ~7 GB scratch, ~5 min
 make contracts                    # every fiscal year since 2008
+make assistance/FY2024.parquet
+python scripts/dump_build.py --dump latest --only naics,sam_entities   # needs pg_restore >= 16
 ```
 
 ## Notes on the data

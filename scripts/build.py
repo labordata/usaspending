@@ -70,7 +70,7 @@ def main():
                 csv_path = zf.extract(member, tmp)
                 # all_varchar: no type sniffing pass; every cast is explicit below.
                 read = (f"read_csv('{csv_path}', header=true, all_varchar=true, "
-                        f"quote='\"', escape='\"', null_padding=true)")
+                        f"quote='\"', escape='\"')")
                 present = {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM {read}").fetchall()}
                 missing = [c for c in cols if c not in present]
                 if missing:
